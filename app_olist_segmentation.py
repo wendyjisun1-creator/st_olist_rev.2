@@ -1,18 +1,30 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import os
 
-# 페이지 설정
-st.set_page_config(page_title="Olist 구매자 심층 분석 대시보드", layout="wide")
+# 1. 페이지 설정 및 프리미엄 스타일링
+st.set_page_config(page_title="Olist 구매자 가치-경험 매트릭스", layout="wide")
 
-# 데이터 로드 함수 (캐싱 사용)
+# 커스텀 CSS로 디자인 강화
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .insight-card { 
+        padding: 20px; border-radius: 12px; margin-bottom: 20px; 
+        border-left: 5px solid #1f77b4; background-color: #ffffff;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    h1, h2, h3 { color: #1e293b; font-family: 'Inter', sans-serif; }
+    </style>
+""", unsafe_allow_html=True)
+
+# 2. 데이터 로드 로직 (Parquet 최적화 및 다중 경로 지원)
 @st.cache_data
 def load_data():
-    # 현재 파일의 디렉토리 경로
     current_dir = os.path.dirname(__file__)
-    
-    # 탐색 후보군: 1. 루트(개별 업로드), 2. DATA_PARQUET 폴더, 3. 로컬 절대 경로
     search_paths = [
         current_dir,
         os.path.join(current_dir, 'DATA_PARQUET'),
@@ -28,173 +40,181 @@ def load_data():
             break
             
     if not base_path:
-        st.error("데이터 파일을 찾을 수 없습니다. 모든 .parquet 파일이 앱 파일과 같은 위치에 있거나 'DATA_PARQUET' 폴더 안에 있는지 확인해주세요.")
+        st.error("데이터 파일을 찾을 수 없습니다. 경로와 파일 전송 상태를 확인해주세요.")
         st.stop()
     
-    # 데이터 읽기 (Parquet 포맷)
+    # 데이터 로드
     orders = pd.read_parquet(os.path.join(base_path, 'proc_olist_orders_dataset.parquet'))
     items = pd.read_parquet(os.path.join(base_path, 'proc_olist_order_items_dataset.parquet'))
     reviews = pd.read_parquet(os.path.join(base_path, 'proc_olist_order_reviews_dataset.parquet'))
     customers = pd.read_parquet(os.path.join(base_path, 'proc_olist_customers_dataset.parquet'))
     products = pd.read_parquet(os.path.join(base_path, 'proc_olist_products_dataset.parquet'))
     
-    # 전처리: 배송 지연 계산
+    # 시간 데이터 및 지연 일수 계산
     orders['order_delivered_customer_date'] = pd.to_datetime(orders['order_delivered_customer_date'])
     orders['order_estimated_delivery_date'] = pd.to_datetime(orders['order_estimated_delivery_date'])
     orders['delay_days'] = (orders['order_delivered_customer_date'] - orders['order_estimated_delivery_date']).dt.days
-    orders['delay_days'] = orders['delay_days'].apply(lambda x: x if x > 0 else 0)
-
-    # 1. 주문별 평균 리뷰 점수
-    order_reviews = reviews.groupby('order_id')['review_score'].mean().reset_index()
+    orders['delay_days'] = orders['delay_days'].clip(lower=0)
     
-    # 2. 주문-고객 맵핑
-    order_cust = orders.merge(customers[['customer_id', 'customer_unique_id']], on='customer_id', how='inner')
-    
-    # 3. 주문 상세 (가격 + 카테고리)
-    items_with_cats = items.merge(products[['product_id', 'product_category_name_english']], on='product_id', how='left')
-    
-    # 고객별 집계
-    # 1. 리뷰/만족도 및 지연 발생
-    cust_review_delay = order_cust.merge(order_reviews, on='order_id', how='inner').groupby('customer_unique_id').agg({
-        'review_score': 'mean',
-        'delay_days': 'mean'
+    # 주문별 단가 합계 및 카테고리 정보
+    order_items = items.merge(products[['product_id', 'product_category_name_english']], on='product_id', how='left')
+    order_summary = order_items.groupby('order_id').agg({
+        'price': 'sum',
+        'product_category_name_english': lambda x: x.iloc[0] if not x.empty else 'Unknown'
     }).reset_index()
     
-    # 2. 구매액 및 빈도
-    order_summary = items.groupby('order_id')['price'].sum().reset_index()
-    cust_monetary = order_cust.merge(order_summary, on='order_id', how='inner').groupby('customer_unique_id').agg({
+    # 통합 병합
+    df = orders.merge(customers[['customer_id', 'customer_unique_id']], on='customer_id')
+    df = df.merge(reviews[['order_id', 'review_score']], on='order_id')
+    df = df.merge(order_summary, on='order_id')
+    
+    # 고객별 마스터 집계 (RFM + 경험 지표)
+    cust_master = df.groupby('customer_unique_id').agg({
+        'review_score': 'mean',
         'price': 'sum',
-        'order_id': 'nunique'
-    }).reset_index().rename(columns={'price': 'Total_Monetary', 'order_id': 'Frequency'})
+        'order_id': 'nunique',
+        'delay_days': 'mean',
+        'product_category_name_english': lambda x: x.value_counts().index[0]
+    }).rename(columns={
+        'review_score': 'Satisfaction',
+        'price': 'Monetary',
+        'order_id': 'Frequency',
+        'delay_days': 'Avg_Delay',
+        'product_category_name_english': 'Primary_Category'
+    }).reset_index()
     
-    # 3. 최종 집계
-    cust_agg = cust_review_delay.merge(cust_monetary, on='customer_unique_id', how='inner').rename(columns={'review_score': 'Avg_Satisfaction'})
+    # RFM 등급 부여 (구매액 기준 상위 10%, 30%, 나머지)
+    m_thresholds = cust_master['Monetary'].quantile([0.7, 0.9]).values
+    def rfm_grade(m):
+        if m >= m_thresholds[1]: return 'VIP'
+        elif m >= m_thresholds[0]: return 'Loyal'
+        else: return 'Regular'
+    cust_master['RFM_Grade'] = cust_master['Monetary'].apply(rfm_grade)
     
-    # RFM 등급 (간이)
-    m_bins = [0, cust_agg['Total_Monetary'].quantile(0.5), cust_agg['Total_Monetary'].quantile(0.8), float('inf')]
-    cust_agg['RFM_Segment'] = pd.cut(cust_agg['Total_Monetary'], bins=m_bins, labels=['Regular', 'Loyal', 'VIP'])
+    return cust_master
 
-    # 카테고리 정보
-    cust_cat_map = order_cust.merge(items_with_cats[['order_id', 'product_category_name_english']], on='order_id', how='inner')
-    cust_cat_map = cust_cat_map[['customer_unique_id', 'product_category_name_english']]
-    
-    return cust_agg, cust_cat_map
-
-# 데이터 로드
 try:
-    df, cust_cat_map = load_data()
+    df_cust = load_data()
 except Exception as e:
-    st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {e}")
+    st.error(f"데이터 정합성 오류: {e}")
     st.stop()
 
-# 타이틀
-st.title("🛍️ Olist 구매자 심층 분석 대시보드")
-st.markdown("구매자의 행동 패턴과 만족도를 다각도로 분석하여 최적화된 마케팅 인사이트를 도출합니다.")
+# 3. 사이드바 컨트롤 (사용자화)
+st.sidebar.header("🎯 전략적 필터링")
+m_standard = st.sidebar.slider("매출 임계값 (Monetary)", 0, int(df_cust['Monetary'].quantile(0.95)), int(df_cust['Monetary'].median()))
+s_standard = st.sidebar.slider("만족도 임계값 (Review Score)", 1.0, 5.0, 3.8, 0.1)
 
-# 탭 구성
-tab_seg, tab_matrix = st.tabs(["📊 구매자 4대 유형 분류", "📈 경험 가치 vs 물류 성능"])
+# 세그먼트 분류 로직 (통합)
+def classify(row):
+    if row['Monetary'] >= m_standard:
+        return 'Premium Core' if row['Satisfaction'] >= s_standard else 'Critical Risk'
+    else:
+        return 'Potential Hero' if row['Satisfaction'] >= s_standard else 'Standard Starter'
 
-# --- TAB 1: 구매자 4대 유형 분류 ---
-with tab_seg:
-    st.subheader("📌 만족도와 구매액 기준 세그먼트")
-    
-    # 사이드바 설정 (공통 활용을 위해 탭 내부에서 호출 가능하지만 여기선 구분)
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        m_threshold = st.slider("매출 임계값 (Monetary)", 0, int(df['Total_Monetary'].quantile(0.95)), int(df['Total_Monetary'].median()), key="s1")
-        sat_threshold = st.slider("만족도 임계값 (Satisfaction)", 1.0, 5.0, 3.5, 0.1, key="s2")
-        
-        def assign_segment_1(row):
-            if row['Total_Monetary'] >= m_threshold and row['Avg_Satisfaction'] >= sat_threshold: return '우상단 (VIP)'
-            elif row['Total_Monetary'] >= m_threshold and row['Avg_Satisfaction'] < sat_threshold: return '좌상단 (위험 고객)'
-            elif row['Total_Monetary'] < m_threshold and row['Avg_Satisfaction'] >= sat_threshold: return '우하단 (잠재 충성군)'
-            else: return '좌하단 (이탈 우려)'
+df_cust['Segment'] = df_cust.apply(classify, axis=1)
 
-        df['Segment_Type'] = df.apply(assign_segment_1, axis=1)
-        
-        plot_df = df.sample(min(len(df), 5000), random_state=42)
-        fig1 = px.scatter(
-            plot_df, x='Avg_Satisfaction', y='Total_Monetary', size='Frequency', color='Segment_Type',
-            hover_name='customer_unique_id', height=500,
-            color_discrete_map={'우상단 (VIP)': '#00CC96', '좌상단 (위험 고객)': '#EF553B', '우하단 (잠재 충성군)':'#636EFA', '좌하단 (이탈 우려)': '#AB63FA'}
-        )
-        fig1.add_vline(x=sat_threshold, line_dash="dash", line_color="gray")
-        fig1.add_hline(y=m_threshold, line_dash="dash", line_color="gray")
-        st.plotly_chart(fig1, use_container_width=True)
+# 4. 헤더 섹션
+st.title("🛡️ Olist 구매자 통합 가치-경험 매트릭스 (Buyer Experience Matrix)")
+st.markdown("단순한 매출액 이상으로, **물류 경험이 고객 가치에 미치는 영향**을 4분면 매트릭스로 분석합니다.")
 
-    with col2:
-        st.markdown("### 💡 유형별 주요 카테고리")
-        for seg in ['우상단 (VIP)', '좌상단 (위험 고객)', '우하단 (잠재 충성군)', '좌하단 (이탈 우려)']:
-            seg_custs = df[df['Segment_Type'] == seg]['customer_unique_id']
-            top_cats = cust_cat_map[cust_cat_map['customer_unique_id'].isin(seg_custs)]['product_category_name_english'].value_counts().head(3).index.tolist()
-            st.markdown(f"**{seg}**")
-            st.write(", ".join(top_cats) if top_cats else "추출 불가")
-            st.divider()
+# 지표 요약
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("총 분석 구매자", f"{len(df_cust):,}")
+m2.metric("평균 만족도", f"{df_cust['Satisfaction'].mean():.2f} ⭐")
+m3.metric("평균 지연 일수", f"{df_cust['Avg_Delay'].mean():.1f} 일")
+m4.metric("VIP 비중", f"{(df_cust['RFM_Grade']=='VIP').mean()*100:.1f}%")
 
-# --- TAB 2: 경험 가치 vs 물류 성능 ---
-with tab_matrix:
-    st.subheader("📌 물류 지연과 RFM 등급 기반 심층 분석")
-    st.markdown("**점의 크기**가 클수록 배송 지연 일수가 길다는 것을 의미합니다.")
-    
-    c1, c2 = st.columns([3, 1])
-    
-    with c1:
-        m_threshold_2 = st.slider("매출 기준점 (Monetary)", 0, int(df['Total_Monetary'].quantile(0.95)), int(df['Total_Monetary'].median()), key="m1")
-        sat_threshold_2 = st.slider("만족도 기준점 (Satisfaction)", 1.0, 5.0, 3.5, 0.1, key="m2")
-        
-        def assign_segment_2(row):
-            if row['Total_Monetary'] >= m_threshold_2 and row['Avg_Satisfaction'] >= sat_threshold_2: return '핵심 구매자 (Core Buyers)'
-            elif row['Total_Monetary'] >= m_threshold_2 and row['Avg_Satisfaction'] < sat_threshold_2: return '불만 고액 고객 (Upset High-spenders)'
-            elif row['Total_Monetary'] < m_threshold_2 and row['Avg_Satisfaction'] >= sat_threshold_2: return '실속 만족 고객 (Efficient Buyers)'
-            else: return '이탈 우려 고객 (At-risk Starters)'
-
-        df['Quadrant'] = df.apply(assign_segment_2, axis=1)
-        
-        plot_df_2 = df.sample(min(len(df), 5000), random_state=42)
-        fig2 = px.scatter(
-            plot_df_2, x='Avg_Satisfaction', y='Total_Monetary', size='delay_days', color='RFM_Segment',
-            hover_name='customer_unique_id', hover_data=['Quadrant', 'delay_days'],
-            color_discrete_map={'VIP': '#FFD700', 'Loyal': '#636EFA', 'Regular': '#AB63FA'}, height=600,
-            labels={'Avg_Satisfaction': '평균 배송 만족도', 'Total_Monetary': '총 구매 금액', 'delay_days': '평균 지연 일수'}
-        )
-        fig2.add_vline(x=sat_threshold_2, line_dash="dash", line_color="gray")
-        fig2.add_hline(y=m_threshold_2, line_dash="dash", line_color="gray")
-        st.plotly_chart(fig2, use_container_width=True)
-
-    with c2:
-        st.markdown("### 🔍 주요 분석 포인트")
-        q_counts = df['Quadrant'].value_counts()
-        for q in ['핵심 구매자 (Core Buyers)', '불만 고액 고객 (Upset High-spenders)', '실속 만족 고객 (Efficient Buyers)', '이탈 우려 고객 (At-risk Starters)']:
-            st.metric(q.split('(')[0], f"{q_counts.get(q, 0):,}명")
-        
-        st.info("🎯 **대조 인사이트**\n'불안정 성장 판매자'는 주로 **불만 고액 고객** 세그먼트 형성에 영향을 미치며, 이는 고액 자산가들의 이탈을 초래합니다.")
-
-# --- 하단 상세 설명 ---
 st.divider()
-st.subheader("📖 분석 가이드 및 페르소나 정의")
-g_col1, g_col2 = st.columns(2)
 
-with g_col1:
-    st.markdown("""
-    #### 1. VIP 파워 쇼퍼 (Core Buyers)
-    - **분석:** Olist의 핵심 자산입니다. 안정적인 배송 서비스를 경험 중입니다.
-    - **가이드:** 기대치가 매우 높으므로 사소한 지연도 치명적입니다. 프리미엄 포장을 권장합니다.
+# 5. 메인 시각화 (통합 매트릭스)
+col_vis, col_desc = st.columns([2, 1])
+
+with col_vis:
+    st.subheader("📍 구매자 경험-가치 매트릭스")
     
-    #### 2. 고가치 이탈 위험군 (Upset High-spenders)
-    - **분석:** 배송 지연으로 화가 난 고액 결제자입니다. **불안정 성장 판매자**의 제품을 샀을 가능성이 높습니다.
-    - **가이드:** 배송 예정일을 보수적으로 설정하고 선제적인 CS 대응이 필수입니다.
+    # 성능 샘플링 (고급 산점도)
+    plot_df = df_cust.sample(min(len(df_cust), 5000), random_state=42)
+    
+    fig = px.scatter(
+        plot_df,
+        x='Satisfaction', y='Monetary',
+        color='RFM_Grade', size='Avg_Delay',
+        hover_name='customer_unique_id',
+        hover_data=['Segment', 'Primary_Category', 'Frequency'],
+        color_discrete_map={'VIP': '#1A3A5F', 'Loyal': '#3A7CA5', 'Regular': '#A2C4D8'},
+        labels={'Satisfaction': '배송 만족도 (Review Score)', 'Monetary': '총 구매 가치 (Monetary)', 'RFM_Grade': '고객 등급'},
+        height=650, template="plotly_white",
+        size_max=30
+    )
+    
+    # 4분면 영역 배경 및 텍스트 추가 (go 활용)
+    fig.add_vline(x=s_standard, line_dash="dash", line_color="#cbd5e1")
+    fig.add_hline(y=m_standard, line_dash="dash", line_color="#cbd5e1")
+    
+    # 영역 라벨링
+    fig.add_annotation(x=4.5, y=plot_df['Monetary'].max()*0.9, text="<b>Premium Core</b>", showarrow=False, font=dict(size=14, color="#059669"))
+    fig.add_annotation(x=1.5, y=plot_df['Monetary'].max()*0.9, text="<b>Critical Risk</b>", showarrow=False, font=dict(size=14, color="#dc2626"))
+    fig.add_annotation(x=4.5, y=m_standard*0.3, text="<b>Potential Hero</b>", showarrow=False, font=dict(size=14, color="#2563eb"))
+    fig.add_annotation(x=1.5, y=m_standard*0.3, text="<b>Standard Starter</b>", showarrow=False, font=dict(size=14, color="#64748b"))
+
+    st.plotly_chart(fig, use_container_width=True)
+
+with col_desc:
+    st.subheader("🔍 세그먼트별 핵심 통찰")
+    
+    seg_stats = df_cust.groupby('Segment').agg({'Avg_Delay': 'mean', 'customer_unique_id': 'count'}).reset_index()
+    
+    for _, row in seg_stats.iterrows():
+        color = "#059669" if row['Segment'] == 'Premium Core' else "#dc2626" if row['Segment'] == 'Critical Risk' else "#2563eb" if row['Segment'] == 'Potential Hero' else "#64748b"
+        with st.container():
+            st.markdown(f"""
+                <div class='insight-card' style='border-left-color: {color};'>
+                    <h4 style='margin:0;'>{row['Segment']}</h4>
+                    <p style='color: gray; font-size: 0.9em;'>규모: {row['customer_unique_id']:,}명</p>
+                    <p><b>평균 배송 지연:</b> {row['Avg_Delay']:.1f}일</p>
+                </div>
+            """, unsafe_allow_html=True)
+    
+    st.info("💡 **버블 크기 분석**: 원의 크기가 클수록 물류 성능이 저하되었음을 의미하며, Critical Risk 영역의 버블 밀집도는 서비스 이탈의 직접적 원인을 시연합니다.")
+
+# 6. 페르소나 정의 및 전략 가이드 (개편)
+st.divider()
+st.subheader("🎭 Olist 구매자 페르소나 리포트: 경험 기반 성장 전략")
+
+p1, p2 = st.columns(2)
+
+with p1:
+    st.markdown("""
+    ### 🥇 [Premium Core] 혁신 성장의 동력
+    - **핵심 지표:** 고매출 + 고만족 (안정적인 배송 만족도 유지)
+    - **분석:** 이들은 주로 **'핵심 판매자(Core Sellers)'** 및 신뢰도 높은 물류망을 이용하는 우량 고객입니다.
+    - **전략:** 이들의 기대치는 업계 최고 수준입니다. 지연 발생 시 즉각적인 보상과 'VVIP 전용 물류 라인' 확보를 통해 이탈 가능성을 0%로 유지해야 합니다.
+    
+    ### 🧨 [Critical Risk] 불안정 성장의 희생양
+    - **핵심 지표:** 고매출 + 저만족 (높은 구매 가치에도 불구하고 지연 발생)
+    - **분석:** 매출 규모는 크지만 운영 점수가 낮은 **'불안정 성장 판매자'**와 연결될 확률이 가장 높습니다. 가장 큰 자산 손실이 발생하는 구간입니다.
+    - **전략:** 이 세그먼트의 발생 원인은 90%가 '물류 성능'에 있습니다. 판매자에게 강력한 패널티를 부여하거나, 플랫폼 차원의 '배송 약속 보장제'를 통해 신뢰를 회복해야 합니다.
     """)
 
-with g_col2:
+with p2:
     st.markdown("""
-    #### 3. 가성비 중시형 (Efficient Buyers)
-    - **분석:** 생필품 등을 구매하며 물류 회전율에 만족하는 실속형 그룹입니다.
-    - **가이드:** 배송비에 매우 민감하므로 배송비를 포함한 가격 노출 전략이 유효합니다.
+    ### 🚀 [Potential Hero] 가성비 기반 잠재 충성군
+    - **핵심 지표:** 저매출 + 고만족 (가벼운 구매 빈도와 높은 서비스 만족도)
+    - **분석:** 구매 단가는 낮지만 긍정적인 경험을 축적 중인 단계입니다. 주로 생필품/액세서리 등의 카테고리를 이용합니다.
+    - **전략:** '만족스러운 경험'을 '더 큰 구매'로 연결하는 전환 캠페인이 필요합니다. 무료 배송 임계값 설정을 통해 객단가를 높여 VIP로 유도하십시오.
     
-    #### 4. 저가치 불만족군 (At-risk Starters)
-    - **분석:** 초기 단계 판매자나 물류 취약 지역 고객이 다수 포함됩니다.
-    - **가이드:** 판매 초기에는 이들의 부정 리뷰가 치명적이므로 안정적인 지역 위주로 판매를 시작하세요.
+    ### ⚠️ [Standard Starter] 초기 서비스의 가늠자
+    - **핵심 지표:** 저매출 + 저만족 (낮은 상호작용 및 부정적 피드백)
+    - **분석:** 주로 **'초기 진입 판매자'** 또는 물류 인프라가 취약한 원거리 지역(AL, MA 등)의 고객들입니다.
+    - **전략:** 첫 구매 경험이 실패로 돌아간 그룹입니다. 이들에게는 재구매 유도보다는 '부정 리뷰의 확산 방지'가 급선무이며, 사은품 증정 등 감성적 품질 관리가 필요합니다.
     """)
 
-st.caption("Olist Data Analysis Dashboard | Generated by Antigravity AI")
+# 7. 판매자 대조 인사이트 (보충 내용)
+st.success("""
+### 🎯 판매자-구매자 시너지 인사이트
+**'불안정 성장 판매자'**의 매출 비중이 높아질수록, 매트릭스의 **Critical Risk(좌상단)** 영역이 급격히 팽창합니다. 
+이는 플랫폼 전체의 LTV(고객 생애 가치)를 갉아먹는 행위입니다. 매출 증대 전략 시 반드시 해당 판매자의 
+**'배송 지연 일수 및 고객 리뷰 연동'**을 모니터링하여 Critical Risk 고객을 Premium Core로 이동시키는 물류 효율화 작업이 선행되어야 합니다.
+""")
+
+st.caption("Olist Data Analysis Dashboard v2.0 | 통합 경험-가치 매트릭스 리포트")
