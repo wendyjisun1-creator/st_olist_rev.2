@@ -245,23 +245,57 @@ with c_risk2:
     </div>
     """, unsafe_allow_html=True)
 
-# 8. 종합 페르소나 리포트 (통합)
+# 8. Olist 구매자 통합 페르소나 리포트 (심층 분석)
 st.divider()
 st.subheader("🎭 Olist 구매자 통합 페르소나 리포트")
+st.markdown("데이터 분석 결과를 바탕으로 도출된 4가지 핵심 페르소나의 행동 패턴과 관리 전략입니다.")
+
 p1, p2 = st.columns(2)
+
 with p1:
+    # 1. 핵심 우량 고객
     st.markdown("""
-    ### 🥇 [핵심 우량 고객] 수익 창출의 핵심
-    - **핵심 지표:** 고매출 + 고만족.
-    - **분석:** 주로 '핵심 판매자(Core Sellers)'로부터 고가 제품을 구매하며 안정적인 배송을 경험합니다.
-    - **전략:** 상파울루(SP) 등 물류 중심지의 VIP 고객들에게 프리미엄 포장 서비스를 제공하여 로열티를 강화하세요.
-    """)
+    <div class='insight-card' style='border-left-color: #059669; padding: 20px;'>
+        <h3 style='margin:0;'>🥇 [핵심 우량 고객] 수익 창출의 절대적 지주</h3>
+        <p style='margin-top:10px;'><strong>📌 핵심 지표:</strong> 높은 구매 금액(Monetary) + 높은 만족도(Satisfaction) + 매우 낮은 지연율</p>
+        <p><strong>비즈니스 가치:</strong> 매출 기여도가 가장 높으며, 플랫폼의 평판을 유지하는 핵심 자산입니다.</p>
+        <p><strong>행동 분석:</strong> 주로 '핵심 판매자(Core Sellers)'의 고가 가전/가구 카테고리를 이용하며, 안정적인 물류 서비스를 최우선 가치로 여깁니다.</p>
+        <p><strong>심층 전략:</strong> 기대치가 매우 높은 그룹이므로 1일 이상의 지연도 치명적일 수 있습니다. 'VIP 전용 물류 루틴'을 적용하고 차별화된 리워드를 집중 배치해야 합니다.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 2. 중점 관리 고객
+    st.markdown("""
+    <div class='insight-card' style='border-left-color: #dc2626; padding: 20px;'>
+        <h3 style='margin:0;'>🧨 [중점 관리 고객] 고위험 자산 이탈군</h3>
+        <p style='margin-top:10px;'><strong>📌 핵심 지표:</strong> 높은 구매 금액(Monetary) + 높은 배송 지연(Delay Days) + 낮은 평점</p>
+        <p><strong>비즈니스 가치:</strong> 고액 결제자임에도 불구하고 물류 실패로 인해 브랜드를 등질 위험이 가장 큰 그룹입니다.</p>
+        <p><strong>행동 분석:</strong> 매출은 높으나 운영 관리가 부실한 <strong>'불안정 성장 판매자'</strong>의 상품을 구매했을 가능성이 매우 높습니다.</p>
+        <p><strong>심층 전략:</strong> 이들은 배송 약속이 깨졌을 때 즉각 이탈합니다. 선제적 지연 예측 시스템과 사과 바우처 발급을 통해 이탈을 필사적으로 차단해야 합니다.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
 with p2:
+    # 3. 성장 잠재 고객
     st.markdown("""
-    ### 🧨 [중점 관리 고객] 고가치 이탈 위험군
-    - **핵심 지표:** 고매출 + 저만족.
-    - **분석:** 돈은 많이 썼지만 배송 지연으로 화가 난 상태입니다. 요주의 지역(RJ, MG 등)의 물류 불안정이 주원인입니다.
-    - **전략:** 배송 예정일을 보수적으로 설정하고, 지연 발생 시 선제적 보상 바우처를 발급하여 이탈을 차단하십시오.
-    """)
+    <div class='insight-card' style='border-left-color: #2563eb; padding: 20px;'>
+        <h3 style='margin:0;'>🚀 [성장 잠재 고객] 가성비를 찾는 효율적 팬덤</h3>
+        <p style='margin-top:10px;'><strong>📌 핵심 지표:</strong> 낮은 구매 금액(Monetary) + 매우 높은 만족도(Satisfaction) + 우수한 물류 품질</p>
+        <p><strong>비즈니스 가치:</strong> 현재 매출은 낮지만 긍정적인 경험(UX)을 축적 중인 '미래의 VIP' 후보군입니다.</p>
+        <p><strong>행동 분석:</strong> 생필품, 뷰티 등 회전율이 빠르고 배송비 부담이 적은 카테고리를 선호하며, 무료 배송 혜택에 민감합니다.</p>
+        <p><strong>심층 전략:</strong> 업셀링(Up-selling)이 핵심입니다. 무료 배송 임계값 설정을 통해 객단가를 높이고, VIP 세그먼트로 이동시켜야 합니다.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 4. 일반 유입 고객
+    st.markdown("""
+    <div class='insight-card' style='border-left-color: #64748b; padding: 20px;'>
+        <h3 style='margin:0;'>⚠️ [일반 유입 고객] 탐색 단계의 불확실 고객</h3>
+        <p style='margin-top:10px;'><strong>📌 핵심 지표:</strong> 낮은 구매 금액(Monetary) + 낮은 평점 + 긴 배송 시일</p>
+        <p><strong>비즈니스 가치:</strong> 첫 구매 경험이 부정적으로 형성된 그룹으로, 플랫폼에 대한 불신이 높습니다.</p>
+        <p><strong>행동 분석:</strong> 초기 진입 판매자나 원거리 물류 취약 지역 고객들이 다수 포함됩니다. 지연 발생 시 부정적 인식을 굳히는 단계입니다.</p>
+        <p><strong>심층 전략:</strong> 부정적 입소문 방지가 최우선입니다. 감성적인 품질 관리(사은품 등)와 신뢰 회복 쿠폰을 통해 다시 방문할 구체적 명분을 제공해야 합니다.</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 st.caption("Olist Data Analysis Dashboard v2.5 | 통합 경험-가치 및 리스크 맵 리포트")
