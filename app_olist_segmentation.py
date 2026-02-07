@@ -10,14 +10,28 @@ st.set_page_config(page_title="Olist 구매자 4대 유형 분석", layout="wide
 # 데이터 로드 함수 (캐싱 사용)
 @st.cache_data
 def load_data():
-    # 데이터 경로 설정 - Parquet 폴더 사용 (배포 및 성능 최적화)
-    # 현재 실행 중인 파일의 위치를 기준으로 경로 설정 (로컬/배포 호환)
+    # 현재 파일의 디렉토리 경로
     current_dir = os.path.dirname(__file__)
-    base_path = os.path.join(current_dir, 'DATA_PARQUET')
     
-    # 만약 위 경로에 데이터가 없으면 절대 경로 시도
-    if not os.path.exists(base_path):
-        base_path = r'c:\fcicb6\data\OLIST_V.2\DATA_PARQUET'
+    # 탐색 후보군: 1. 루트(개별 업로드), 2. DATA_PARQUET 폴더, 3. 로컬 절대 경로
+    search_paths = [
+        current_dir,
+        os.path.join(current_dir, 'DATA_PARQUET'),
+        r'c:\fcicb6\data\OLIST_V.2\DATA_PARQUET'
+    ]
+    
+    base_path = None
+    # 기준 파일 하나를 골라 경로가 유효한지 확인
+    target_check_file = 'proc_olist_orders_dataset.parquet'
+    
+    for p in search_paths:
+        if os.path.exists(os.path.join(p, target_check_file)):
+            base_path = p
+            break
+            
+    if not base_path:
+        st.error("데이터 파일을 찾을 수 없습니다. 모든 .parquet 파일이 앱 파일과 같은 위치에 있거나 'DATA_PARQUET' 폴더 안에 있는지 확인해주세요.")
+        st.stop()
     
     # 필수 데이터 읽기 (Parquet 포맷)
     orders = pd.read_parquet(os.path.join(base_path, 'proc_olist_orders_dataset.parquet'))
