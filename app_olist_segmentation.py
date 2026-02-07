@@ -10,9 +10,10 @@ st.set_page_config(page_title="Olist 구매자 4대 유형 분석", layout="wide
 # 데이터 로드 함수 (캐싱 사용)
 @st.cache_data
 def load_data():
-    base_path = r'c:\fcicb6\data\OLIST_V.2\DATA_REV.2'
+    # 데이터 경로 설정 - OS 독립적인 경로 처리
+    base_path = os.path.join('c:', os.sep, 'fcicb6', 'data', 'OLIST_V.2', 'DATA_REV.2')
     
-    # 데이터 읽기
+    # 필수 데이터 읽기
     orders = pd.read_csv(os.path.join(base_path, 'proc_olist_orders_dataset.csv'))
     items = pd.read_csv(os.path.join(base_path, 'proc_olist_order_items_dataset.csv'))
     reviews = pd.read_csv(os.path.join(base_path, 'proc_olist_order_reviews_dataset.csv'))
