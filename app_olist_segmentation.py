@@ -133,16 +133,19 @@ with col_vis:
     st.subheader("📍 구매자 경험-가치 매트릭스")
     
     # 성능 샘플링 (고급 산점도)
-    plot_df = df_cust.sample(min(len(df_cust), 5000), random_state=42)
+    plot_df = df_cust.sample(min(len(df_cust), 5000), random_state=42).copy()
+    
+    # Plotly 에러 방지: size 컬럼에 NaN이나 0 이하가 있으면 에러 발생 가능
+    plot_df['Avg_Delay_Plot'] = plot_df['Avg_Delay'].fillna(0).clip(lower=0.1)
     
     fig = px.scatter(
         plot_df,
         x='Satisfaction', y='Monetary',
-        color='RFM_Grade', size='Avg_Delay',
+        color='RFM_Grade', size='Avg_Delay_Plot',
         hover_name='customer_unique_id',
-        hover_data=['Segment', 'Primary_Category', 'Frequency'],
+        hover_data={'Segment': True, 'Primary_Category': True, 'Frequency': True, 'Avg_Delay': ':.1f', 'Avg_Delay_Plot': False},
         color_discrete_map={'VIP': '#1A3A5F', 'Loyal': '#3A7CA5', 'Regular': '#A2C4D8'},
-        labels={'Satisfaction': '배송 만족도 (Review Score)', 'Monetary': '총 구매 가치 (Monetary)', 'RFM_Grade': '고객 등급'},
+        labels={'Satisfaction': '배송 만족도 (Review Score)', 'Monetary': '총 구매 가치 (Monetary)', 'RFM_Grade': '고객 등급', 'Avg_Delay': '평균 지연 일수'},
         height=650, template="plotly_white",
         size_max=30
     )
