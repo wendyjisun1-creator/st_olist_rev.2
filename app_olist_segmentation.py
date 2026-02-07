@@ -10,15 +10,21 @@ st.set_page_config(page_title="Olist 구매자 4대 유형 분석", layout="wide
 # 데이터 로드 함수 (캐싱 사용)
 @st.cache_data
 def load_data():
-    # 데이터 경로 설정 - 절대 경로 직접 지정
-    base_path = r'c:\fcicb6\data\OLIST_V.2\DATA_REV.2'
+    # 데이터 경로 설정 - Parquet 폴더 사용 (배포 및 성능 최적화)
+    # 현재 실행 중인 파일의 위치를 기준으로 경로 설정 (로컬/배포 호환)
+    current_dir = os.path.dirname(__file__)
+    base_path = os.path.join(current_dir, 'DATA_PARQUET')
     
-    # 필수 데이터 읽기
-    orders = pd.read_csv(os.path.join(base_path, 'proc_olist_orders_dataset.csv'))
-    items = pd.read_csv(os.path.join(base_path, 'proc_olist_order_items_dataset.csv'))
-    reviews = pd.read_csv(os.path.join(base_path, 'proc_olist_order_reviews_dataset.csv'))
-    customers = pd.read_csv(os.path.join(base_path, 'proc_olist_customers_dataset.csv'))
-    products = pd.read_csv(os.path.join(base_path, 'proc_olist_products_dataset.csv'))
+    # 만약 위 경로에 데이터가 없으면 절대 경로 시도
+    if not os.path.exists(base_path):
+        base_path = r'c:\fcicb6\data\OLIST_V.2\DATA_PARQUET'
+    
+    # 필수 데이터 읽기 (Parquet 포맷)
+    orders = pd.read_parquet(os.path.join(base_path, 'proc_olist_orders_dataset.parquet'))
+    items = pd.read_parquet(os.path.join(base_path, 'proc_olist_order_items_dataset.parquet'))
+    reviews = pd.read_parquet(os.path.join(base_path, 'proc_olist_order_reviews_dataset.parquet'))
+    customers = pd.read_parquet(os.path.join(base_path, 'proc_olist_customers_dataset.parquet'))
+    products = pd.read_parquet(os.path.join(base_path, 'proc_olist_products_dataset.parquet'))
     
     # 주문별 평균 리뷰 점수
     order_reviews = reviews.groupby('order_id')['review_score'].mean().reset_index()
