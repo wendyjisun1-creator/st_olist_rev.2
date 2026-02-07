@@ -3,25 +3,30 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import os
+import json
 
 # 1. 페이지 설정 및 프리미엄 스타일링
-st.set_page_config(page_title="Olist 구매자 통합 분석", layout="wide")
+st.set_page_config(page_title="Olist 구매자 통합 분석 및 물류 위험 지도", layout="wide")
 
-# 커스텀 CSS로 디자인 강화 (폰트 및 카드 스타일)
+# 커스텀 CSS로 디자인 강화
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
     .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .insight-card { 
-        padding: 25px; border-radius: 12px; margin-bottom: 20px; 
+        padding: 20px; border-radius: 12px; margin-bottom: 20px; 
         border-left: 5px solid #1f77b4; background-color: #ffffff;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
-    h1, h2, h3 { color: #1e293b; font-family: 'Inter', 'Apple SD Gothic Neo', sans-serif; }
+    h1, h2, h3 { color: #1e293b; font-family: 'Inter', sans-serif; }
+    .risk-alert {
+        padding: 15px; background-color: #fff5f5; border-left: 5px solid #e53e3e;
+        border-radius: 8px; margin-top: 10px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# 2. 데이터 로드 로직 (다중 경로 지원 및 오류 진단 포함)
+# 2. 데이터 로드 로직 (Parquet 최적화 및 다중 경로 지원)
 @st.cache_data
 def load_data():
     current_dir = os.path.dirname(__file__)
@@ -40,46 +45,21 @@ def load_data():
             break
             
     if not base_path:
-        st.error("❌ 데이터 파일을 찾을 수 없습니다. 모든 .parquet 파일이 앱 파일과 같은 위치에 있는지 확인해주세요.")
+        st.error("데이터 파일을 찾을 수 없습니다. 경로와 파일 전송 상태를 확인해주세요.")
         st.stop()
     
-    # --- 파일 용량 진단 (0바이트 오류 확인용) ---
-    files_to_load = [
-        'proc_olist_orders_dataset.parquet',
-        'proc_olist_order_items_dataset.parquet',
-        'proc_olist_order_reviews_dataset.parquet',
-        'proc_olist_customers_dataset.parquet',
-        'proc_olist_products_dataset.parquet'
-    ]
-    
-    st.sidebar.subheader("🔍 파일 상태 확인")
-    for f in files_to_load:
-        f_path = os.path.join(base_path, f)
-        if os.path.exists(f_path):
-            size_mb = os.path.getsize(f_path) / (1024 * 1024)
-            if size_mb < 0.001: 
-                st.sidebar.error(f"🚨 {f}: 용량 부족 (다시 업로드 필요)")
-            else:
-                st.sidebar.success(f"✅ {f}: {size_mb:.2f} MB")
-        else:
-            st.sidebar.warning(f"❓ {f}: 파일 없음")
-    # ---------------------------------------
-
-    try:
-        orders = pd.read_parquet(os.path.join(base_path, 'proc_olist_orders_dataset.parquet'))
-        items = pd.read_parquet(os.path.join(base_path, 'proc_olist_order_items_dataset.parquet'))
-        reviews = pd.read_parquet(os.path.join(base_path, 'proc_olist_order_reviews_dataset.parquet'))
-        customers = pd.read_parquet(os.path.join(base_path, 'proc_olist_customers_dataset.parquet'))
-        products = pd.read_parquet(os.path.join(base_path, 'proc_olist_products_dataset.parquet'))
-    except Exception as e:
-        st.error(f"❌ 데이터 로드 오류: {e}")
-        st.stop()
+    # 데이터 로드
+    orders = pd.read_parquet(os.path.join(base_path, 'proc_olist_orders_dataset.parquet'))
+    items = pd.read_parquet(os.path.join(base_path, 'proc_olist_order_items_dataset.parquet'))
+    reviews = pd.read_parquet(os.path.join(base_path, 'proc_olist_order_reviews_dataset.parquet'))
+    customers = pd.read_parquet(os.path.join(base_path, 'proc_olist_customers_dataset.parquet'))
+    products = pd.read_parquet(os.path.join(base_path, 'proc_olist_products_dataset.parquet'))
     
     # 시간 데이터 및 지연 일수 계산
     orders['order_delivered_customer_date'] = pd.to_datetime(orders['order_delivered_customer_date'])
     orders['order_estimated_delivery_date'] = pd.to_datetime(orders['order_estimated_delivery_date'])
     orders['delay_days'] = (orders['order_delivered_customer_date'] - orders['order_estimated_delivery_date']).dt.days
-    orders['delay_days'] = orders['delay_days'].fillna(0).clip(lower=0)
+    orders['delay_days'] = orders['delay_days'].clip(lower=0)
     
     # 주문별 단가 합계 및 카테고리 정보
     order_items = items.merge(products[['product_id', 'product_category_name_english']], on='product_id', how='left')
@@ -89,11 +69,11 @@ def load_data():
     }).reset_index()
     
     # 통합 병합
-    df = orders.merge(customers[['customer_id', 'customer_unique_id']], on='customer_id')
+    df = orders.merge(customers[['customer_id', 'customer_unique_id', 'customer_state']], on='customer_id')
     df = df.merge(reviews[['order_id', 'review_score']], on='order_id')
     df = df.merge(order_summary, on='order_id')
     
-    # 고객별 마스터 집계
+    # 고객별 마스터 집계 (RFM + 경험 지표)
     cust_master = df.groupby('customer_unique_id').agg({
         'review_score': 'mean',
         'price': 'sum',
@@ -108,7 +88,7 @@ def load_data():
         'product_category_name_english': 'Primary_Category'
     }).reset_index()
     
-    # RFM 등급 부여 (한글화)
+    # RFM 등급 부여
     m_thresholds = cust_master['Monetary'].quantile([0.7, 0.9]).values
     def rfm_grade(m):
         if m >= m_thresholds[1]: return 'VIP 고객'
@@ -116,21 +96,31 @@ def load_data():
         else: return '일반 고객'
     cust_master['RFM_Grade'] = cust_master['Monetary'].apply(rfm_grade)
     
-    return cust_master
+    # 주(State)별 집계
+    state_agg = df.groupby('customer_state').agg({
+        'delay_days': 'mean',
+        'review_score': 'mean',
+        'price': 'sum'
+    }).rename(columns={
+        'delay_days': 'Avg_Delay',
+        'review_score': 'Avg_Review',
+        'price': 'Total_Sales'
+    }).reset_index()
+    
+    return cust_master, state_agg
 
 try:
-    df_cust = load_data()
+    df_cust, df_state = load_data()
 except Exception as e:
-    st.error(f"데이터 정합성 확인 실패: {e}")
+    st.error(f"데이터 정합성 오류: {e}")
     st.stop()
 
 # 3. 사이드바 컨트롤
-st.sidebar.divider()
-st.sidebar.header("🎯 분석 기준 설정")
+st.sidebar.header("🎯 전략적 필터링")
 m_standard = st.sidebar.slider("매출 임계값 (Monetary)", 0, int(df_cust['Monetary'].quantile(0.95)), int(df_cust['Monetary'].median()))
 s_standard = st.sidebar.slider("만족도 임계값 (Review Score)", 1.0, 5.0, 3.8, 0.1)
 
-# 세그먼트 분류 (한글화)
+# 세그먼트 분류 로직
 def classify(row):
     if row['Monetary'] >= m_standard:
         return '핵심 우량 고객' if row['Satisfaction'] >= s_standard else '중점 관리(이탈 위험)'
@@ -140,8 +130,8 @@ def classify(row):
 df_cust['Segment'] = df_cust.apply(classify, axis=1)
 
 # 4. 헤더 섹션
-st.title("🛡️ Olist 구매자 통합 가치-경험 매트릭스")
-st.markdown("구매 금액(가치)과 만족도(경험)를 결합하여 고객의 상태를 다각도로 분석합니다.")
+st.title("🛡️ Olist 구매자 통합 분석 및 물류 위험 지도")
+st.markdown("구매자 가치-경험 매트릭스와 지역별 물류 위험도를 결합하여 입체적인 전략을 제시합니다.")
 
 # 지표 요약
 m1, m2, m3, m4 = st.columns(4)
@@ -152,84 +142,126 @@ m4.metric("VIP 비중", f"{(df_cust['RFM_Grade']=='VIP 고객').mean()*100:.1f}%
 
 st.divider()
 
-# 5. 메인 시각화 섹션
+# 5. 구매자 가치-경험 매트릭스
 col_vis, col_desc = st.columns([2, 1])
-
 with col_vis:
-    st.subheader("📍 고객 가치-경험 매트릭스 (시각화)")
-    
+    st.subheader("📍 고객 경험-가치 매트릭스 시각화")
     plot_df = df_cust.sample(min(len(df_cust), 5000), random_state=42).copy()
     plot_df['Avg_Delay_Plot'] = plot_df['Avg_Delay'].fillna(0).clip(lower=0.1)
     
     fig = px.scatter(
-        plot_df,
-        x='Satisfaction', y='Monetary',
-        color='RFM_Grade', size='Avg_Delay_Plot',
+        plot_df, x='Satisfaction', y='Monetary', color='RFM_Grade', size='Avg_Delay_Plot',
         hover_name='customer_unique_id',
-        hover_data={'Segment': True, 'Avg_Delay': ':.1f', 'Frequency': True, 'Avg_Delay_Plot': False},
+        hover_data={'Segment': True, 'Primary_Category': True, 'Frequency': True, 'Avg_Delay': ':.1f', 'Avg_Delay_Plot': False},
         color_discrete_map={'VIP 고객': '#1A3A5F', '충성 고객': '#3A7CA5', '일반 고객': '#A2C4D8'},
-        labels={'Satisfaction': '배송 만족도', 'Monetary': '총 구매 가치', 'RFM_Grade': '등급', 'Avg_Delay': '평균 지연 일수'},
-        height=700, template="plotly_white", size_max=35
+        labels={'Satisfaction': '배송 만족도', 'Monetary': '총 구매 가치', 'RFM_Grade': '고객 등급'},
+        height=650, template="plotly_white", size_max=35
     )
-    
-    # 가독성 개선 (폰트 확대)
-    fig.update_layout(
-        font=dict(size=14),
-        xaxis_title=dict(font=dict(size=16, color="black")),
-        yaxis_title=dict(font=dict(size=16, color="black")),
-    )
-    
+    fig.update_layout(font=dict(size=14))
     fig.add_vline(x=s_standard, line_dash="dash", line_color="#cbd5e1")
     fig.add_hline(y=m_standard, line_dash="dash", line_color="#cbd5e1")
-    
-    # 4분면 한글 라벨링
     fig.add_annotation(x=4.5, y=plot_df['Monetary'].max()*0.9, text="<b>핵심 우량 고객</b>", showarrow=False, font=dict(size=18, color="#059669"))
-    fig.add_annotation(x=1.5, y=plot_df['Monetary'].max()*0.9, text="<b>중점 관리(고위험)</b>", showarrow=False, font=dict(size=18, color="#dc2626"))
+    fig.add_annotation(x=1.5, y=plot_df['Monetary'].max()*0.9, text="<b>중점 관리(이탈)</b>", showarrow=False, font=dict(size=18, color="#dc2626"))
     fig.add_annotation(x=4.5, y=m_standard*0.4, text="<b>성장 잠재 고객</b>", showarrow=False, font=dict(size=18, color="#2563eb"))
     fig.add_annotation(x=1.5, y=m_standard*0.4, text="<b>일반 유입 고객</b>", showarrow=False, font=dict(size=18, color="#64748b"))
-
     st.plotly_chart(fig, use_container_width=True)
 
 with col_desc:
     st.subheader("🔍 세그먼트 요약 리포트")
     seg_stats = df_cust.groupby('Segment').agg({'Avg_Delay': 'mean', 'customer_unique_id': 'count'}).reset_index()
-    
     for _, row in seg_stats.iterrows():
         color = "#059669" if row['Segment'] == '핵심 우량 고객' else "#dc2626" if row['Segment'] == '중점 관리(이탈 위험)' else "#2563eb" if row['Segment'] == '성장 잠재 고객' else "#64748b"
-        with st.container():
-            st.markdown(f"""
-                <div class='insight-card' style='border-left-color: {color}; padding: 25px;'>
-                    <h3 style='margin:0; font-size: 1.4em;'>{row['Segment']}</h3>
-                    <p style='color: #475569; font-size: 1.1em; margin-top: 5px;'><b>규모:</b> {row['customer_unique_id']:,}명</p>
-                    <p style='font-size: 1.1em;'><b>평균 배송 지연:</b> <span style='color: {color}; font-weight: bold;'>{row['Avg_Delay']:.1f}일</span></p>
-                </div>
-            """, unsafe_allow_html=True)
+        st.markdown(f"<div class='insight-card' style='border-left-color: {color}; padding: 15px;'><h4>{row['Segment']}</h4><p>규모: {row['customer_unique_id']:,}명</p><p>평균 지연: {row['Avg_Delay']:.1f}일</p></div>", unsafe_allow_html=True)
 
-# 6. 페르소나 및 전략 가이드 (한글)
 st.divider()
-st.subheader("🎭 Olist 구매자 페르소나 리포트")
-p1, p2 = st.columns(2)
 
+# 6. 주(State)별 물류 위험 지도
+st.subheader("🗺️ 브라질 주(State)별 물류 위험 지도")
+st.markdown("색상은 **평균 평점**(빨간색일수록 위험), 버블 크기는 **총 매출액**을 나타냅니다.")
+
+# 브라질 주 센터 좌표 (시각화용 대략적 위치)
+state_coords = {
+    'AC': [-9.02, -70.81], 'AL': [-9.57, -36.78], 'AP': [1.41, -51.77], 'AM': [-3.47, -62.21],
+    'BA': [-12.97, -38.51], 'CE': [-3.71, -38.54], 'DF': [-15.78, -47.93], 'ES': [-19.19, -40.34],
+    'GO': [-16.68, -49.25], 'MA': [-2.53, -44.30], 'MT': [-12.64, -55.42], 'MS': [-20.44, -54.64],
+    'MG': [-18.51, -44.55], 'PA': [-1.45, -48.50], 'PB': [-7.11, -34.86], 'PR': [-25.42, -49.27],
+    'PE': [-8.05, -34.88], 'PI': [-5.09, -42.80], 'RJ': [-22.90, -43.17], 'RN': [-5.79, -35.21],
+    'RS': [-30.03, -51.23], 'RO': [-8.76, -63.90], 'RR': [2.82, -60.67], 'SC': [-27.59, -48.54],
+    'SP': [-23.55, -46.63], 'SE': [-10.91, -37.07], 'TO': [-10.17, -48.33]
+}
+
+df_state['lat'] = df_state['customer_state'].map(lambda x: state_coords.get(x, [0,0])[0])
+df_state['lon'] = df_state['customer_state'].map(lambda x: state_coords.get(x, [0,0])[1])
+
+# 지도 시각화 (Scattergeo with Choropleth-like feel)
+fig_map = px.scatter_geo(
+    df_state, lat='lat', lon='lon', color='Avg_Review', size='Total_Sales',
+    hover_name='customer_state', size_max=40,
+    color_continuous_scale='Reds_r', # 평점이 낮을수록 진한 빨간색
+    range_color=[3.0, 4.5],
+    labels={'Avg_Review': '평균 평점', 'Total_Sales': '총 매출액', 'Avg_Delay': '평균 지연'},
+    hover_data={'Avg_Delay': ':.1f', 'lat': False, 'lon': False},
+    projection="natural earth",
+    title="주별 매출 규모 vs 서비스 만족도"
+)
+fig_map.update_geos(scope='south america', showcountries=True, countrycolor="lightgray", showlakes=False)
+fig_map.update_layout(height=600, margin={"r":0,"t":50,"l":0,"b":0})
+
+st.plotly_chart(fig_map, use_container_width=True)
+
+# 7. 물류 요주의 지역 분석 및 경고
+st.divider()
+st.subheader("⚠️ 물류 요주의 지역 및 대조 분석")
+
+high_risk_states = df_state[df_state['Avg_Review'] < 3.8].sort_values('Total_Sales', ascending=False)
+top_risk = high_risk_states.iloc[0]['customer_state'] if not high_risk_states.empty else "None"
+
+c_risk1, c_risk2 = st.columns(2)
+with c_risk1:
+    st.markdown(f"""
+    #### 🚩 물류 요주의 지역 (Logistics Critical Zones)
+    매출 규모는 크지만 서비스 만족도가 낮은 지역입니다.
+    - **최고 위험 지역:** `{top_risk}` (매출 대비 낮은 서비스 지수)
+    - **관리 필요 지역:** {', '.join(high_risk_states['customer_state'].tolist()[:3])}
+    
+    이 지역들은 플랫폼의 핵심 수익원이지만 **'불안정 성장 판매자'**의 영향을 가장 많이 받아 고객 이탈이 가속화되고 있습니다.
+    """)
+
+with c_risk2:
+    # 특정 위험 지역 경고 오토 제너레이션
+    warn_text = ""
+    if 'AL' in df_state['customer_state'].values or 'MA' in df_state['customer_state'].values:
+        remote_states = df_state[df_state['customer_state'].isin(['AL', 'MA'])]
+        for _, r in remote_states.iterrows():
+            if r['Avg_Delay'] > 15:
+                warn_text += f"**{r['customer_state']} 지역 경고:** 평균 배송 지연 {r['Avg_Delay']:.1f}일로 임계치 초과. "
+    
+    st.markdown(f"""
+    <div class='risk-alert'>
+        <strong>🚨 시스템 자동 경고:</strong><br>
+        {warn_text if warn_text else "현재 특이 지연 지역이 식별되지 않았습니다."}<br><br>
+        AL, MA 등의 지역은 배송 편차가 매우 커서 <strong>'저가치 불만족군'</strong>을 대량 양산하고 있습니다. 
+        신규 판매자의 무리한 지역 확장보다는 안정적인 지역(SP, RJ) 위주의 배송 허브 구축이 시급합니다.
+    </div>
+    """, unsafe_allow_html=True)
+
+# 8. 종합 페르소나 리포트 (통합)
+st.divider()
+st.subheader("🎭 Olist 구매자 통합 페르소나 리포트")
+p1, p2 = st.columns(2)
 with p1:
     st.markdown("""
-    ### 🥇 [핵심 우량 고객] 수익 창출의 주역 
-    - 높은 구매력과 만족도를 모두 갖춘 로열티 높은 그룹입니다. 주로 우수 판매자의 제품을 구매합니다.
-    - **전략:** VIP 전용 빠른 배송 프로모션과 세심한 케어를 통해 현 수준의 기대를 계속 충족시켜야 합니다.
-
-    ### 🧨 [중점 관리 고객] 고위험 이탈군
-    - 구매 금액은 크지만 배송 지연 등으로 인해 만족도가 매우 낮은 그룹입니다. 이탈 위기에 처해 있습니다.
-    - **전략:** 즉각적인 사후 보상(바우처 등)이 필요하며, 고가 제품 판매 시의 물류 프로세스를 가장 먼저 점검해야 합니다.
+    ### 🥇 [핵심 우량 고객] 수익 창출의 핵심
+    - **핵심 지표:** 고매출 + 고만족.
+    - **분석:** 주로 '핵심 판매자(Core Sellers)'로부터 고가 제품을 구매하며 안정적인 배송을 경험합니다.
+    - **전략:** 상파울루(SP) 등 물류 중심지의 VIP 고객들에게 프리미엄 포장 서비스를 제공하여 로열티를 강화하세요.
     """)
-
 with p2:
     st.markdown("""
-    ### 🚀 [성장 잠재 고객] 가성비를 찾는 팬덤
-    - 구매액은 아직 적지만 서비스에 만족하며 긍정적인 경험을 쌓고 있습니다. 
-    - **전략:** 단가 높은 제품으로의 유도를 위해 맞춤형 추천 및 타임 세일 혜택을 제공하여 VIP로의 전환을 유도하세요.
-
-    ### ⚠️ [일반 유입 고객] 탐색 단계의 신규 고객
-    - 낮은 구매액과 만족도를 보이는 그룹으로, 주로 운영이 미숙한 판매자나 원거리 배송의 피해자일 가능성이 큽니다.
-    - **전략:** 재방문 의사를 높이기 위해 배송비 페이백이나 사은품 증정 등 감성적인 해결책을 시도하십시오.
+    ### 🧨 [중점 관리 고객] 고가치 이탈 위험군
+    - **핵심 지표:** 고매출 + 저만족.
+    - **분석:** 돈은 많이 썼지만 배송 지연으로 화가 난 상태입니다. 요주의 지역(RJ, MG 등)의 물류 불안정이 주원인입니다.
+    - **전략:** 배송 예정일을 보수적으로 설정하고, 지연 발생 시 선제적 보상 바우처를 발급하여 이탈을 차단하십시오.
     """)
 
-st.caption("Olist Data Analysis Dashboard Final | Generated by Antigravity AI")
+st.caption("Olist Data Analysis Dashboard v2.5 | 통합 경험-가치 및 리스크 맵 리포트")
