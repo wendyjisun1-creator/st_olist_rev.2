@@ -86,9 +86,9 @@ def load_data():
     # RFM 등급 부여 (구매액 기준 상위 10%, 30%, 나머지)
     m_thresholds = cust_master['Monetary'].quantile([0.7, 0.9]).values
     def rfm_grade(m):
-        if m >= m_thresholds[1]: return 'VIP'
-        elif m >= m_thresholds[0]: return 'Loyal'
-        else: return 'Regular'
+        if m >= m_thresholds[1]: return 'VIP 고객'
+        elif m >= m_thresholds[0]: return '충성 고객'
+        else: return '일반 고객'
     cust_master['RFM_Grade'] = cust_master['Monetary'].apply(rfm_grade)
     
     return cust_master
@@ -107,22 +107,22 @@ s_standard = st.sidebar.slider("만족도 임계값 (Review Score)", 1.0, 5.0, 3
 # 세그먼트 분류 로직 (통합)
 def classify(row):
     if row['Monetary'] >= m_standard:
-        return 'Premium Core' if row['Satisfaction'] >= s_standard else 'Critical Risk'
+        return '핵심 우량 고객' if row['Satisfaction'] >= s_standard else '중점 관리(이탈 위험)'
     else:
-        return 'Potential Hero' if row['Satisfaction'] >= s_standard else 'Standard Starter'
+        return '성장 잠재 고객' if row['Satisfaction'] >= s_standard else '일반 유입 고객'
 
 df_cust['Segment'] = df_cust.apply(classify, axis=1)
 
 # 4. 헤더 섹션
-st.title("🛡️ Olist 구매자 통합 가치-경험 매트릭스 (Buyer Experience Matrix)")
-st.markdown("단순한 매출액 이상으로, **물류 경험이 고객 가치에 미치는 영향**을 4분면 매트릭스로 분석합니다.")
+st.title("🛡️ Olist 구매자 통합 가치-경험 매트릭스")
+st.markdown("구매 금액(가치)과 배송 만족도(경험)를 결합하여 고객의 상태를 다각도로 분석합니다.")
 
 # 지표 요약
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("총 분석 구매자", f"{len(df_cust):,}")
 m2.metric("평균 만족도", f"{df_cust['Satisfaction'].mean():.2f} ⭐")
 m3.metric("평균 지연 일수", f"{df_cust['Avg_Delay'].mean():.1f} 일")
-m4.metric("VIP 비중", f"{(df_cust['RFM_Grade']=='VIP').mean()*100:.1f}%")
+m4.metric("VIP 비중", f"{(df_cust['RFM_Grade']=='VIP 고객').mean()*100:.1f}%")
 
 st.divider()
 
@@ -130,12 +130,10 @@ st.divider()
 col_vis, col_desc = st.columns([2, 1])
 
 with col_vis:
-    st.subheader("📍 구매자 경험-가치 매트릭스")
+    st.subheader("📍 고객 경험-가치 매트릭스 시각화")
     
     # 성능 샘플링 (고급 산점도)
     plot_df = df_cust.sample(min(len(df_cust), 5000), random_state=42).copy()
-    
-    # Plotly 에러 방지: size 컬럼에 NaN이나 0 이하가 있으면 에러 발생 가능
     plot_df['Avg_Delay_Plot'] = plot_df['Avg_Delay'].fillna(0).clip(lower=0.1)
     
     fig = px.scatter(
@@ -144,72 +142,86 @@ with col_vis:
         color='RFM_Grade', size='Avg_Delay_Plot',
         hover_name='customer_unique_id',
         hover_data={'Segment': True, 'Primary_Category': True, 'Frequency': True, 'Avg_Delay': ':.1f', 'Avg_Delay_Plot': False},
-        color_discrete_map={'VIP': '#1A3A5F', 'Loyal': '#3A7CA5', 'Regular': '#A2C4D8'},
-        labels={'Satisfaction': '배송 만족도 (Review Score)', 'Monetary': '총 구매 가치 (Monetary)', 'RFM_Grade': '고객 등급', 'Avg_Delay': '평균 지연 일수'},
-        height=650, template="plotly_white",
-        size_max=30
+        color_discrete_map={'VIP 고객': '#1A3A5F', '충성 고객': '#3A7CA5', '일반 고객': '#A2C4D8'},
+        labels={
+            'Satisfaction': '배송 만족도 (Review Score)', 
+            'Monetary': '총 구매 가치 (Monetary)', 
+            'RFM_Grade': '고객 등급',
+            'Avg_Delay': '평균 지연 일수'
+        },
+        height=700, template="plotly_white",
+        size_max=35
     )
     
-    # 4분면 영역 배경 및 텍스트 추가 (go 활용)
+    # 레이아웃 폰트 크기 조절
+    fig.update_layout(
+        font=dict(size=14),
+        xaxis_title=dict(font=dict(size=16, color="black")),
+        yaxis_title=dict(font=dict(size=16, color="black")),
+        legend_title=dict(font=dict(size=14)),
+        hoverlabel=dict(font_size=14)
+    )
+    
+    # 4분면 영역 가이드선
     fig.add_vline(x=s_standard, line_dash="dash", line_color="#cbd5e1")
     fig.add_hline(y=m_standard, line_dash="dash", line_color="#cbd5e1")
     
-    # 영역 라벨링
-    fig.add_annotation(x=4.5, y=plot_df['Monetary'].max()*0.9, text="<b>Premium Core</b>", showarrow=False, font=dict(size=14, color="#059669"))
-    fig.add_annotation(x=1.5, y=plot_df['Monetary'].max()*0.9, text="<b>Critical Risk</b>", showarrow=False, font=dict(size=14, color="#dc2626"))
-    fig.add_annotation(x=4.5, y=m_standard*0.3, text="<b>Potential Hero</b>", showarrow=False, font=dict(size=14, color="#2563eb"))
-    fig.add_annotation(x=1.5, y=m_standard*0.3, text="<b>Standard Starter</b>", showarrow=False, font=dict(size=14, color="#64748b"))
+    # 영역 라벨링 (한글화 및 폰트 확대)
+    fig.add_annotation(x=4.5, y=plot_df['Monetary'].max()*0.9, text="<b>핵심 우량 고객</b>", showarrow=False, font=dict(size=18, color="#059669"))
+    fig.add_annotation(x=1.5, y=plot_df['Monetary'].max()*0.9, text="<b>중점 관리(이탈 위험)</b>", showarrow=False, font=dict(size=18, color="#dc2626"))
+    fig.add_annotation(x=4.5, y=m_standard*0.4, text="<b>성장 잠재 고객</b>", showarrow=False, font=dict(size=18, color="#2563eb"))
+    fig.add_annotation(x=1.5, y=m_standard*0.4, text="<b>일반 유입 고객</b>", showarrow=False, font=dict(size=18, color="#64748b"))
 
     st.plotly_chart(fig, use_container_width=True)
 
 with col_desc:
-    st.subheader("🔍 세그먼트별 핵심 통찰")
+    st.subheader("🔍 세그먼트 요약 리포트")
     
     seg_stats = df_cust.groupby('Segment').agg({'Avg_Delay': 'mean', 'customer_unique_id': 'count'}).reset_index()
     
     for _, row in seg_stats.iterrows():
-        color = "#059669" if row['Segment'] == 'Premium Core' else "#dc2626" if row['Segment'] == 'Critical Risk' else "#2563eb" if row['Segment'] == 'Potential Hero' else "#64748b"
+        color = "#059669" if row['Segment'] == '핵심 우량 고객' else "#dc2626" if row['Segment'] == '중점 관리(이탈 위험)' else "#2563eb" if row['Segment'] == '성장 잠재 고객' else "#64748b"
         with st.container():
             st.markdown(f"""
-                <div class='insight-card' style='border-left-color: {color};'>
-                    <h4 style='margin:0;'>{row['Segment']}</h4>
-                    <p style='color: gray; font-size: 0.9em;'>규모: {row['customer_unique_id']:,}명</p>
-                    <p><b>평균 배송 지연:</b> {row['Avg_Delay']:.1f}일</p>
+                <div class='insight-card' style='border-left-color: {color}; padding: 25px;'>
+                    <h3 style='margin:0; font-size: 1.4em;'>{row['Segment']}</h3>
+                    <p style='color: #475569; font-size: 1.1em; margin-top: 5px;'><b>규모:</b> {row['customer_unique_id']:,}명</p>
+                    <p style='font-size: 1.1em;'><b>평균 배송 지연:</b> <span style='color: {color}; font-weight: bold;'>{row['Avg_Delay']:.1f}일</span></p>
                 </div>
             """, unsafe_allow_html=True)
     
-    st.info("💡 **버블 크기 분석**: 원의 크기가 클수록 물류 성능이 저하되었음을 의미하며, Critical Risk 영역의 버블 밀집도는 서비스 이탈의 직접적 원인을 시연합니다.")
+    st.info("💡 **그래프 읽는 법**: 점의 크기가 클수록 배송 지연이 심한 고객입니다. 좌측 상단에 큰 점이 많을수록 판매자 물류 관리가 시급함을 의미합니다.")
 
-# 6. 페르소나 정의 및 전략 가이드 (개편)
+# 6. 페르소나 정의 및 전략 가이드 (한글 고도화)
 st.divider()
-st.subheader("🎭 Olist 구매자 페르소나 리포트: 경험 기반 성장 전략")
+st.subheader("🎭 Olist 구매자 페르소나 리포트")
 
 p1, p2 = st.columns(2)
 
 with p1:
     st.markdown("""
-    ### 🥇 [Premium Core] 혁신 성장의 동력
-    - **핵심 지표:** 고매출 + 고만족 (안정적인 배송 만족도 유지)
-    - **분석:** 이들은 주로 **'핵심 판매자(Core Sellers)'** 및 신뢰도 높은 물류망을 이용하는 우량 고객입니다.
-    - **전략:** 이들의 기대치는 업계 최고 수준입니다. 지연 발생 시 즉각적인 보상과 'VVIP 전용 물류 라인' 확보를 통해 이탈 가능성을 0%로 유지해야 합니다.
+    ### 🥇 [핵심 우량 고객] 수익 창출의 핵심
+    - **특징:** 높은 구매력과 만족도를 모두 갖춘 로열티 높은 그룹입니다.
+    - **배송 품질:** 주로 정시 배송 비율이 높은 우수 판매자 제품을 구매합니다.
+    - **핵심 전략:** VIP 전용 빠른 배송 프로모션과 '배송 안심 알림'을 통해 현 수준의 기대를 계속 충족시켜야 합니다.
     
-    ### 🧨 [Critical Risk] 불안정 성장의 희생양
-    - **핵심 지표:** 고매출 + 저만족 (높은 구매 가치에도 불구하고 지연 발생)
-    - **분석:** 매출 규모는 크지만 운영 점수가 낮은 **'불안정 성장 판매자'**와 연결될 확률이 가장 높습니다. 가장 큰 자산 손실이 발생하는 구간입니다.
-    - **전략:** 이 세그먼트의 발생 원인은 90%가 '물류 성능'에 있습니다. 판매자에게 강력한 패널티를 부여하거나, 플랫폼 차원의 '배송 약속 보장제'를 통해 신뢰를 회복해야 합니다.
+    ### 🧨 [중점 관리 고객] 고위험 이탈군
+    - **특징:** 구매 금액은 크지만 만족도가 낮아 이탈 확률이 매우 높은 그룹입니다.
+    - **배송 품질:** **'불안정 성장 판매자'**로부터 잦은 배송 지연을 경험했을 가능성이 큽니다.
+    - **핵심 전략:** 즉각적인 사후 보상(바우처 제공)과 지연 원인 조사가 필요하며, 고가 제품 판매 시 물류 프로세스를 재점검해야 합니다.
     """)
 
 with p2:
     st.markdown("""
-    ### 🚀 [Potential Hero] 가성비 기반 잠재 충성군
-    - **핵심 지표:** 저매출 + 고만족 (가벼운 구매 빈도와 높은 서비스 만족도)
-    - **분석:** 구매 단가는 낮지만 긍정적인 경험을 축적 중인 단계입니다. 주로 생필품/액세서리 등의 카테고리를 이용합니다.
-    - **전략:** '만족스러운 경험'을 '더 큰 구매'로 연결하는 전환 캠페인이 필요합니다. 무료 배송 임계값 설정을 통해 객단가를 높여 VIP로 유도하십시오.
+    ### 🚀 [성장 잠재 고객] 가성비를 찾는 팬덤
+    - **특징:** 아직 구매액은 적지만 서비스에 만족하며 긍정적인 경험을 쌓고 있습니다.
+    - **배송 품질:** 단가 대비 만족스러운 속도의 배송을 경험하고 있는 상태입니다.
+    - **핵심 전략:** 재구매 주기를 단축할 수 있는 큐레이션 메일과 타임 세일을 통해 고단가 제품으로의 전환을 유도하세요.
     
-    ### ⚠️ [Standard Starter] 초기 서비스의 가늠자
-    - **핵심 지표:** 저매출 + 저만족 (낮은 상호작용 및 부정적 피드백)
-    - **분석:** 주로 **'초기 진입 판매자'** 또는 물류 인프라가 취약한 원거리 지역(AL, MA 등)의 고객들입니다.
-    - **전략:** 첫 구매 경험이 실패로 돌아간 그룹입니다. 이들에게는 재구매 유도보다는 '부정 리뷰의 확산 방지'가 급선무이며, 사은품 증정 등 감성적 품질 관리가 필요합니다.
+    ### ⚠️ [일반 유입 고객] 탐색 단계의 신규 고객
+    - **특징:** 낮은 구매액과 만족도를 보이는 그룹으로 첫인상이 좋지 않은 편입니다.
+    - **배송 품질:** 초기 판매자의 운영 미숙이나 원거리 배송 지연의 영향을 주로 받습니다.
+    - **핵심 전략:** 부정 리뷰 작성 가능성이 높으므로 사은품 증정이나 배송비 페이백 등 감성적인 해결책으로 재방문 의사를 높여야 합니다.
     """)
 
 # 7. 판매자 대조 인사이트 (보충 내용)
